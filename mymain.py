@@ -2,9 +2,6 @@
 #	1) Frame steps
 #	2) Frame dimensions
 #   3) Turn on or off the KZ standards (depending on the goal)
-
-
-
 import sys, os
 import cv2
 import keras
@@ -65,7 +62,7 @@ def detect_vehicle(frame, framenumber):
 
     return R
 
-def cutvehicle(frame, n, R):
+def cutvehicle(frame, n, R, boxforcars):
     print('\t\t%d cars found' % len(R))
     Iorig = frame
     WH = np.array(Iorig.shape[1::-1],dtype=float)
@@ -75,72 +72,98 @@ def cutvehicle(frame, n, R):
 
     for i,r in enumerate(R):
         x1 = int(r[2][0])-int(r[2][2]/2)
-        y1 = int(r[2][1])-int(r[2][3]/2)+400
+        y1 = int(r[2][1])-int(r[2][3]/2)+280
         x2 = int(r[2][0])+int(r[2][2]/2)
-        y2 = int(r[2][1])+int(r[2][3]/2)+400
+        y2 = int(r[2][1])+int(r[2][3]/2)+280
         
-        cx,cy,w,h = (np.array(r[2])/np.concatenate( (WH,WH) )).tolist()
-
-        tl = np.array([cx - w/2., cy - h/2.])
-        br = np.array([cx + w/2., cy + h/2.])
-        label = Label(0,tl,br)
-        Icar = crop_region(Iorig,label)
-
-        Lcars.append(label)
-        
-        cv2.imwrite('%s/%s_%dcar.png' % (output_dir,n,i),Icar)
+        cv2.imwrite('%s/%s_%dcar.png' % (output_dir,n,i), frame[y1:y2, x1:x2])
         green = (50, 205, 50)
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), 3)
+        boxforcars.append(tuple([x1, y1, int(r[2][2]), int(r[2][3])]))
     
+def checkfortrack(boxforcars, R):
+    for j in boxforcars:
+        for i, r in enumerate(R):
+            x1 = int(r[2][0])-int(r[2][2]/2)
+            y1 = int(r[2][1])-int(r[2][2]/2)+280
+            x2 = int(r[2][0])+int(r[2][2]/2)
+            y2 = int(r[2][1])+int(r[2][2]/2)+280
+
+            print(j)
+        
 
 def crossinglines(frame):
     blue = (255, 0, 0)
     green = (50, 205, 50)
-    cv2.line(frame, (0, 400), (1800, 400), blue, 5) # draw first line 
-    cv2.line(frame, (0, 680), (1800, 680), green, 5) # draw second line
+    cv2.line(frame, (0, 280), (1800, 280), blue, 5) # draw first line 
+    cv2.line(frame, (0, 580), (1800, 580), green, 5) # draw second line
     return frame
 
 
 if __name__ == "__main__":
     
     cap = cv2.VideoCapture("atbasar.avi")
-    n = -1
-    previous = ""
+    numbFrames = -1
+    boxforcars = []
+
+    tracker_type = 'MOSSE'
+    trackers = cv2.MultiTracker_create()
+
+
     writer = None
     while True:
 
-        n += 1
+        numbFrames += 1
 
         ret, frame = cap.read()
 
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        if n%10==0: print("[INFO] {} total frames in video".format(total))
+        if numbFrames%7==0: print("[INFO] {} total frames in video".format(total))
 
         #cuttedframe = frame[:] #Parameter to tune
 
         if ret == False:
             break
 
-        try:
-            print("Frame number #" + str(n))
-            if n % 5 == 0: #Parameter to tune
-                start_time = time.time()
-                cv2.imwrite('frame.jpg', frame)
-                frame = crossinglines(frame)
-
-#################################   VEHICLE DETECTION   #################################
-                frame_forCarDetection = frame[400:680, 0:1800]
-                cv2.imwrite('cuttedframe.jpg', frame_forCarDetection)
-                R = detect_vehicle(frame_forCarDetection, n)
-                R = [r for r in R if r[0] in [b'car', b'bus']]
-
-                if len(R) != 0: cutvehicle(frame, n, R)
-                else: continue
+        print("Frame number #" + str(numbFrames))
+        print(boxforcars)
+        if numbFrames % 25 == 0: trackers= cv2.MultiTracker_create()
+        if numbFrames % 7==0:
+            status = "Detecting"
+# #################################   VEHICLE DETECTION   #################################
+            start_time = time.time()
+            cv2.imwrite('frame.jpg', frame)
+            frame_forCarDetection = frame[400:680, 0:1800]
+            frame_forCarTracking = frame[400:,:]
+            cv2.imwrite('cuttedframe.jpg', frame_forCarDetection)
+            R = detect_vehicle(frame_forCarDetection, numbFrames)
+            R = [r for r in R if r[0] in [b'car', b'bus']]    
+            if len(R) != 0: 
+                cutvehicle(frame, numbFrames, R, boxforcars)
                 end_time = time.time()
                 print("Vehicle detection time: " + str(end_time - start_time))
-                cv2.imshow( 'Video', frame)
-                """                
+                trackers.add(cv2.TrackerMOSSE_create(), frame, boxforcars[-1])
+
+        else:
+            status = "Tracking"
+            newbox = None
+            success, boxes = trackers.update(frame)
+            print(type(trackers))
+            print(trackers)
+            for box in boxes:
+                (x, y, w, h) = [int(v) for v in box]
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+
+
+        frame = crossinglines(frame)
+
+        cv2.imshow( 'Video', frame)
+        if cv2.waitKey(1)&0xff==ord('q'):
+            break
+        
+"""                
 #################################   LICENSE PLATE DETECTION   #################################
 
                 #Time 2
@@ -306,17 +329,6 @@ if __name__ == "__main__":
                 	writer = cv2.VideoWriter("output_video.mp4", fourcc, 30, (frame.shape[1], frame.shape[0]), True)
 
                 writer.write(frame)"""
-                if cv2.waitKey(1)&0xff==ord('q'):
-                    break
-                continue            
-            else:
-                continue
-
-        except:
-            traceback.print_exc()
-            sys.exit(1)
-
-        sys.exit(0)
-    #writer.release()
-    print("Finished.")
-    cap.release()
+#writer.release()
+print("Finished.")
+cap.release()
